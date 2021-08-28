@@ -93,15 +93,15 @@ void loop() {
   
   if(delta_pitch < 0){
     digitalWrite(IO_pin_L, HIGH);
-    digitalWrite(IO_pin_R, HIGH);
+    digitalWrite(IO_pin_R, LOW);
   }
   else if(delta_pitch >= 0){
     digitalWrite(IO_pin_L, LOW);
-    digitalWrite(IO_pin_R, LOW);
+    digitalWrite(IO_pin_R, HIGH);
   }
 
-  ledcWrite(PWM_CH_L, (int)(delta_pitch * 600));
-  ledcWrite(PWM_CH_R, (int)(delta_pitch * 600));
+  ledcWrite(PWM_CH_L, (int)(delta_roll / 17 * 10 * 1000));
+  ledcWrite(PWM_CH_R, (int)(delta_roll / 17 * 10 * 1000));
   
   delay(1);
 }
