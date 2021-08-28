@@ -1,6 +1,7 @@
 #define M5STACK_MPU6886 
 
 #include <M5Stack.h>
+#include <cmath>
 
 /********** For PWM **********/
 const int PWM_pin_L = 2;
@@ -100,8 +101,8 @@ void loop() {
     digitalWrite(IO_pin_R, HIGH);
   }
 
-  ledcWrite(PWM_CH_L, (int)(delta_roll / 17 * 10 * 1000));
-  ledcWrite(PWM_CH_R, (int)(delta_roll / 17 * 10 * 1000));
+  ledcWrite(PWM_CH_L, (int)(abs(delta_roll) / 17 * 10 * 1000));
+  ledcWrite(PWM_CH_R, (int)(abs(delta_roll) / 17 * 10 * 1000));
   
   delay(1);
 }
