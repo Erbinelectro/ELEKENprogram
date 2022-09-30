@@ -1,167 +1,118 @@
-#define M5STACK_MPU6886 
+/*
+  セグウェイには2つのモーターを動かせるモータードライバが必要です。
+  またはモータードライバを2つ用意してください。
+  このプログラムは朱雀技研で売ってるCytron 40A 10V-45V SmartDrive DCモータドライバをPWMモードで動かすことを想定しています
+
+  前提として、M5StackやESP32系統ではarduino unoなどで使えるanalogWiteによるPWM出力ができないので、ledcWriteを使う必要があります。
+  これはsetup関数の中で、ledcSetup(ch, Hz, level)によりチャンネルの周波数と分解能を設定し、
+  ledcAttachPin(pin,ch)によってgpioピンとチャンネルを紐づけます。
+  このチャンネルは0から正の整数の値で用意できます。
+  loop関数の中では実際に出力ができ、ON時間は（数字/分解能）/周波数で求まります。
+  ex) 20Hz 8bit 25 のときは50msを256分割し、その25の分ONにしますという意味なので、約5msONになることがわかります。
+
+  ボタンによる回転方向指定についてです。モータードライバーのin1がHIGHかLOWかによって回転方向が変わります。
+  どっちに回したいかによって自分で設定しなおしてください。
+
+  方向指定しつつ、回転速度を決めるのがセグウェイの制御の肝です。
+  ボタンによって決めるのであれば、if文で方向指定をして、いい感じの速度で回せば良いですが、
+  6軸センサによって決めるときは、roll、pitch角の正負によって方向指定をして、絶対値によって回転速度を決めると製品っぽくなります。
+  ですが、6軸センサは難しいので、使うにしても方向指定のみに使うといいと思います。
+
+*/
 
 #include <M5Stack.h>
-#include <cmath>
 
-/********** For PWM **********/
-const int PWM_pin_L = 2;
-const int PWM_pin_R = 5;
+const double PWM_Hz = 2000;// PWM周波数
+const uint8_t PWM_level = 8;// PWM分解能 8bit(1～256)
+const uint8_t PWM_CH_L = 0;//L motorDriverに入れるpwmを扱うチャンネルを0、直す前は1になっていて、どちらも1では両方制御できないのが明白だとわかると思います。
+const uint8_t PWM_CH_R = 1;//R motorDriverに入れるpwmを扱うチャンネルを1、
 
-const int PWM_CH_L = 0;
-const int PWM_CH_R = 1;
-const int PWM_Hz = 50;
-const uint8_t PWM_level = 12;
-//PWM resolution max1023?
+const int PWM_pin_L = 2;//L motor driver in2
+const int PWM_pin_R = 5;//R motor driver in2
 
-const int CompensatePram = 10;
-
-const int Uprate = 1;
-const int Deforate = pow(2, PWM_level) / 20;
-int rotateSpeed = 20;
-
-signed int UDcount = 0;
-/****************************/
-
-/********** For I/O **********/
-const int IO_pin_L = 16;
-const int IO_pin_R = 17;
-
-
-/********** For IMU **********/
-const double RTD = 57.324f;//RAD_TO_DEG
-const double DTR = 0.01745329251994329576923690768489f;//RAD_TO_DEG;
-
-float accX, accY, accZ;
-float gyroX, gyroY, gyroZ;
-float pitch, roll, yaw;
-float my_pitch, my_roll, my_yaw;
-float default_pitch, default_roll, default_yaw;
-float delta_pitch, delta_roll, delta_yaw;
-float Temp;
-/*******************************/
-
-//prottype declear
-void startin();
-void setHoveringPos(char _command);
-void Compensator(float roll, float yaw);
+const int IO_pin_L = 16;//L motor driver in1
+const int IO_pin_R = 17;//R motor driver in1
 
 void setup() {
   M5.begin();
   M5.Power.begin();
 
-  M5.IMU.Init();
-
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(GREEN , BLACK);
-  M5.Lcd.fillScreen(BLACK);
-  
-  m5.Lcd.setCursor(100, 100);
-  m5.Lcd.printf("M5 boot\r\n");
-
-  ledcSetup(PWM_CH_L, PWM_Hz, PWM_level);
-  ledcSetup(PWM_CH_R, PWM_Hz, PWM_level);
-  
-  ledcAttachPin(PWM_pin_L, PWM_CH_L);
-  ledcAttachPin(PWM_pin_R, PWM_CH_R);
-  
-  pinMode(PWM_pin_L, OUTPUT);
-  pinMode(PWM_pin_R, OUTPUT);
-
+  pinMode(PWM_pin_L, OUTPUT); 
+  pinMode(PWM_pin_R, OUTPUT); 
   pinMode(IO_pin_L, OUTPUT);
   pinMode(IO_pin_R, OUTPUT);
   
-  delay(1000);
-  m5.Lcd.clear(WHITE);
-  M5.Lcd.setTextColor(GREEN , WHITE);
 
-  startin();
-  m5.Lcd.printf("startin\r\n");
+  // チャンネルと周波数の分解能を設定
+  ledcSetup(PWM_CH_L, PWM_Hz, PWM_level);
+  ledcSetup(PWM_CH_R, PWM_Hz, PWM_level);
+  // モータのピンとチャンネルの紐づけ
+  ledcAttachPin(PWM_pin_L, PWM_CH_L);
+  ledcAttachPin(PWM_pin_R, PWM_CH_R);
+
+  //M5stackの起動時に回り続けないようにする。
+  ledcWrite(PWM_CH_L,0);
+  ledcWrite(PWM_CH_R,0);
+
+  M5.Lcd.setTextSize(244);
+  M5.Lcd.setTextColor(GREEN , BLACK);
+  M5.Lcd.fillScreen(BLACK);
+  
 }
 
 void loop() {
-  M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
-  M5.IMU.getAccelData(&accX,&accY,&accZ);
-  M5.IMU.getAhrsData(&pitch,&roll,&yaw);
+  M5.update();
+  M5.Lcd.setCursor(0, 0);
 
-  float my_roll = atan(accY / accZ) * RAD_TO_DEG;
-  float my_pitch = atan(-accX / sqrtf(accY*accY + accZ*accZ)) * RAD_TO_DEG;
+  if (M5.BtnB.isPressed())
+  {
+    // デューティー比0.25(64/256)でPWM制御
+    digitalWrite(IO_pin_L, HIGH);
+    digitalWrite(IO_pin_R, HIGH);
+    ledcWrite(PWM_CH_L,64);
+    ledcWrite(PWM_CH_R,64);
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.printf("↑");
+  }
 
-  M5.Lcd.setCursor(0, 100);
-  delta_pitch = (my_pitch - default_pitch) * DTR;
-  delta_roll = (my_roll - default_roll) * DTR;
-  M5.Lcd.printf("dP = %5.1f, dR = %5.1f", delta_pitch, delta_roll);
-  //Serial.printf("deltaP = %5.1f, deltaR = %5.1f\r\n", pow(delta_roll, 2), pow(delta_roll, 2));
-  
-  if(delta_pitch < 0){
+  else if (M5.BtnA.isPressed())
+  {
+    // デューティー比0.25(64/256)でPWM制御
     digitalWrite(IO_pin_L, HIGH);
     digitalWrite(IO_pin_R, LOW);
+    ledcWrite(PWM_CH_L,8);
+    ledcWrite(PWM_CH_R,64);
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.printf("←");
   }
-  else if(delta_pitch >= 0){
+
+  else if (M5.BtnC.isPressed())
+  {
+    // デューティー比0.25(64/256)でPWM制御
     digitalWrite(IO_pin_L, LOW);
     digitalWrite(IO_pin_R, HIGH);
+    ledcWrite(PWM_CH_L,64);
+    ledcWrite(PWM_CH_R,8);
+    M5.Lcd.setCursor(0, 0);
+     M5.Lcd.printf("→");
   }
+ /*  else if (M5.BtnC.isPressed())
+  {
+    // デューティー比0.25(64/256)でPWM制御
+    ledcWrite(PWM_CH_L,);
+    ledcWrite(PWM_CH_R,);
+    M5.Lcd.setCursor(0, 0);
+     M5.Lcd.printf("↓");
+  }
+  */
 
-  ledcWrite(PWM_CH_L, (int)(abs(delta_roll) / 17 * 10 * 1000));
-  ledcWrite(PWM_CH_R, (int)(abs(delta_roll) / 17 * 10 * 1000));
-  
-  delay(1);
-}
-
-void startin(){
-  Serial.print("Set default XYZ\r\n");
-  M5.IMU.getGyroData(&gyroX,&gyroY,&gyroZ);
-  M5.IMU.getAccelData(&accX,&accY,&accZ);
-  M5.IMU.getAhrsData(&pitch,&roll,&yaw);
-
-  default_roll = atan(accY / accZ) * RAD_TO_DEG;
-  default_pitch = atan(-accX / sqrtf(accY*accY + accZ*accZ)) * RAD_TO_DEG;
-  
-  Serial.print("ESC boot\r\n");
-  ledcWrite(PWM_CH_L, 0);
-  ledcWrite(PWM_CH_R, 0);
-  delay(500);
+  else
+  {
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.printf("STOP");
     
-  Serial.print("Motor start\r\n");
-  ledcWrite(PWM_CH_L, 230);
-  ledcWrite(PWM_CH_R, 230);//1dato over current
-  delay(1000);
-
-  ledcWrite(PWM_CH_L, Deforate);
-  ledcWrite(PWM_CH_R, Deforate);
-
-  m5.Lcd.clear(WHITE);
-  //M5.Lcd.fillScreen(WHITE);
-}
-
-void setHoveringPos(char _command){
-  Serial.printf("%c\r\n", _command);
-  if(_command == 'w'){
-    UDcount ++;
-    rotateSpeed = Deforate + Uprate * UDcount;
-    
-    ledcWrite(PWM_CH_L, rotateSpeed);
-    ledcWrite(PWM_CH_R, rotateSpeed);
-    Serial.printf("w %d\r\n", rotateSpeed);
+    //とめる
+    ledcWrite(PWM_CH_L,0);
+    ledcWrite(PWM_CH_R,0);
   }
-  else if(_command == 's'){
-    UDcount --;
-    rotateSpeed = Deforate + Uprate * UDcount;
-    
-    ledcWrite(PWM_CH_L, rotateSpeed);
-    ledcWrite(PWM_CH_R, rotateSpeed);
-    Serial.printf("s %d\r\n", rotateSpeed);
-  }
-  else if(_command == 'r'){
-    UDcount = 0;
-    startin();
-  }
-  else if(_command == 'e'){
-    ledcWrite(PWM_CH_L, 0);
-    ledcWrite(PWM_CH_R, 0);
-  }
-}
-
-void Compensator(float _roll, float _yaw, int _rotateSpeed){
-  ledcWrite(PWM_CH_L, rotateSpeed + _roll * CompensatePram);
-  ledcWrite(PWM_CH_R, rotateSpeed - _roll * CompensatePram);
 }
