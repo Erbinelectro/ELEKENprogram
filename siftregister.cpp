@@ -4,7 +4,6 @@ BusOut x(p20, p19, p18, p17, p16);//ser
 DigitalOut a(p22);//rclk
 DigitalOut b(p23);//srclk
 DigitalOut c(p24);//srclr
-Serial pc(USBTX,USBRX);
 
 void srclk(){
     b=1; wait_us(1); b=0;
@@ -40,7 +39,6 @@ void output(char outputdata,long time){
         x=1; c=1; srclk(); 
         x=0; c=1; //20usかかる
     }
-    pc.printf("%d,%d,%d,%d,%d,%d,%d,%d\r\n",(int)t0,(int)t1,(int)t2,(int)t3,(int)t4,(int)t5,(int)t6,(int)t7);
 }
 
 int main(){
